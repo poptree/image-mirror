@@ -9,7 +9,6 @@ on:
       - reopened
       - edited
 
-
 # 需要执行的任务列表
 jobs:
   # 镜像转换任务
@@ -98,34 +97,53 @@ jobs:
         run: |
           wget -q  https://github.com/AliyunContainerService/image-syncer/releases/download/v1.5.4/image-syncer-v1.5.4-linux-amd64.tar.gz
           tar zxf image-syncer-v1.5.4-linux-amd64.tar.gz 
-          sudo  apt install dos2unix 
+          sudo apt install dos2unix 
       - name: start sync
         if: steps.check_body.outputs.is_image_format == 'true'
         id: syncImage
         env:
           TARGET_REGISTRY_PASSWORD: ${{ secrets.TARGET_REGISTRY_PASSWORD }}
           TARGET_REGISTRY_USER: ${{ vars.TARGET_REGISTRY_USER }}
-          # TARGET_REGISTRY: index.docker.io
-          # TARGET_REGISTRY: registry.cn-hangzhou.aliyuncs.com
           TARGET_NAMESPACE: ${{ vars.TARGET_NAMESPACE }}
           TARGET_REGISTRY: ${{ vars.TARGET_REGISTRY }}
-        #处理body中的空格和tab和换行，并在结尾添加: ， 写入images.yml 文件
         run: | 
           echo "${{ github.event.issue.body }}" > images-init.yml 
-          dos2unix              images-init.yml
+          dos2unix images-init.yml
           sed -i 's/^[ \t]*//g' images-init.yml
           sed -i 's/[ \t]*$//g' images-init.yml
-          sed -i '/^[  ]*$/d'   images-init.yml
-          # img=$(cat images-init.yml)
+          sed -i '/^[  ]*$/d' images-init.yml
+          
+          # 处理镜像名称转换
           img=$(tail -n +2 images-init.yml)
           for i in ${img[@]}
           do
-            tagName=$(echo $i | awk -F "/" '{print $NF}');
-            echo $i: ${TARGET_REGISTRY}/${TARGET_NAMESPACE}/${tagName} >> images.yml;
-            echo ${TARGET_REGISTRY}/${TARGET_NAMESPACE}/${tagName} >> dockerhub-image.yml;
+            # 提取镜像路径（去除仓库地址）
+            image_path="${i#*/}"
+            
+            # 提取版本号
+            version="${image_path##*:}"
+            
+            # 提取镜像名称（去除版本号）
+            image_name="${image_path%:*}"
+            
+            # 提取来源前缀（第一个斜杠前的内容）
+            source_prefix="${image_name%%/*}"
+            
+            # 提取剩余路径（去除来源前缀）
+            remaining_path="${image_name#*/}"
+            
+            # 将剩余路径中的斜杠替换为短横线
+            sanitized_path=$(echo "$remaining_path" | tr '/' '-')
+            
+            # 构建新的镜像标签：registry.cn-shenzhen.aliyuncs.com/globalmirror/docker.io:coreos-etcd-v3.5.23
+            target_image="${TARGET_REGISTRY}/${TARGET_NAMESPACE}/${source_prefix}:${sanitized_path}-${version}"
+            
+            echo "$i $target_image" >> images.yml
+            echo "$target_image" >> dockerhub-image.yml
           done
+          
           cat images.yml
-          ./image-syncer  --auth=./auth.yml --images=./images.yml 
+          ./image-syncer --auth=./auth.yml --images=./images.yml 
       - name: Add Success Issues
         if: ${{ success() && steps.check_body.outputs.is_image_format == 'true' }} 
         uses: actions/github-script@v5
